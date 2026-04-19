@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt
+
+      - name: Run backend unit and contract tests
+        env:
+          APP_MODE: demo
+          AUTH_ENABLED: "false"
+          ENABLE_DEV_ENDPOINTS: "true"
+          INGESTION_MODE: simulator
+          CORS_ORIGINS: "*"
+        run: |
+          pytest api/tests -q
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Run frontend interaction tests
+        working-directory: dashboard
+        run: npm run test:run
+
+      - name: Build frontend
+        working-directory: dashboard
+        run: npm run build
+
+      - name: Start API for smoke pipeline
+        env:
+          APP_MODE: demo
+          AUTH_ENABLED: "false"
+          ENABLE_DEV_ENDPOINTS: "true"
+          INGESTION_MODE: simulator
+          CORS_ORIGINS: "*"
+        run: |
+          nohup uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/api.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8000/api/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API failed to start"
+          cat /tmp/api.log
+          exit 1
+
+      - name: Run end-to-end smoke pipeline
+        env:
+          API_BASE_URL: http://127.0.0.1:8000
+        run: |
+          python scripts/smoke_pipeline.py

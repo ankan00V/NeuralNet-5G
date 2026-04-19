@@ -1,0 +1,12 @@
+{
+  "best_val_macro_f1": 0.5341289545401909,
+  "train_sequences_raw": 113400,
+  "train_sequences": 27720,
+  "val_sequences": 14150,
+  "test_sequences": 14200,
+  "input_size": 24,
+  "prediction_horizon_minutes": [
+    15,
+    30
+  ]
+}

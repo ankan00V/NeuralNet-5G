@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.venv/
+venv/
+node_modules/
+dist/
+coverage/
+model/*.pt
+model/*.pkl
+model/*.png
+data/output/*.csv
+

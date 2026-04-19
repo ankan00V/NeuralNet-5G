@@ -1,0 +1,112 @@
+/* ─── tokens.css  (import this before any component CSS) ─── */
+
+:root {
+  /* ── LIGHT MODE (default) ── */
+
+  /* Page surfaces */
+  --bg-page:            #F4F4F2;   /* warm off-white page background */
+  --bg-card:            #FFFFFF;   /* card / panel surface */
+  --bg-card-raised:     #FFFFFF;   /* elevated card (dispatch ticket, modals) */
+  --bg-card-inset:      #F0EFE9;   /* inset / secondary card (drill cards, sub-panels) */
+  --bg-dark-card:       #1A1A1A;   /* intentionally dark cards (dispatch ticket inner,
+                                      autonomous response block) — same in both modes */
+
+  /* Text */
+  --text-primary:       #0D0D0D;   /* headings, numbers, high-emphasis */
+  --text-secondary:     #4A4A47;   /* body copy, descriptions */
+  --text-tertiary:      #7A7A76;   /* labels, captions, timestamps */
+  --text-on-dark:       #F0EFE9;   /* text sitting on --bg-dark-card */
+  --text-on-dark-muted: #A8A8A2;   /* secondary text on dark cards */
+
+  /* Semantic — status colors (same hue in both modes, only lightness shifts) */
+  --color-critical:     #C0392B;
+  --color-critical-bg:  #FDECEA;
+  --color-critical-text:#7B1B12;
+
+  --color-warning:      #B45309;
+  --color-warning-bg:   #FEF3CD;
+  --color-warning-text: #7A3800;
+
+  --color-playbook:     #1D5FA5;
+  --color-playbook-bg:  #E6F0FB;
+  --color-playbook-text:#0C3D72;
+
+  --color-recovered:    #1A7A4A;
+  --color-recovered-bg: #E6F5EC;
+  --color-recovered-text:#0D4D2C;
+
+  --color-auto:         #0D7A7A;
+  --color-auto-bg:      #E6F5F5;
+  --color-auto-text:    #084F4F;
+
+  /* Brand accent */
+  --accent:             #2563EB;   /* primary blue — buttons, active nav, live dots */
+  --accent-hover:       #1D4ED8;
+  --accent-text:        #FFFFFF;   /* text ON accent-colored elements */
+
+  /* Network health score colors */
+  --health-high:        #15803D;   /* 75–100 */
+  --health-mid:         #B45309;   /* 40–74 */
+  --health-low:         #C0392B;   /* 0–39 */
+
+  /* Borders */
+  --border:             rgba(0,0,0,0.10);
+  --border-strong:      rgba(0,0,0,0.18);
+
+  /* Map legend dots — keep same in both modes */
+  --pin-nominal:        #22C55E;
+  --pin-warning:        #F59E0B;
+  --pin-critical:       #EF4444;
+
+  /* Scrollbar */
+  --scrollbar-thumb:    rgba(0,0,0,0.20);
+  --scrollbar-track:    transparent;
+}
+
+/* ── DARK MODE ── */
+[data-theme="dark"] {
+  --bg-page:            #0D0D0D;
+  --bg-card:            #1A1A1A;
+  --bg-card-raised:     #242424;
+  --bg-card-inset:      #141414;
+  --bg-dark-card:       #1A1A1A;   /* same — already dark */
+
+  --text-primary:       #F0EFE9;
+  --text-secondary:     #B0AFA9;
+  --text-tertiary:      #6E6E6A;
+  --text-on-dark:       #F0EFE9;
+  --text-on-dark-muted: #A8A8A2;
+
+  --color-critical:     #F87171;
+  --color-critical-bg:  #2D1212;
+  --color-critical-text:#FCA5A5;
+
+  --color-warning:      #FBBF24;
+  --color-warning-bg:   #2D1F06;
+  --color-warning-text: #FDE68A;
+
+  --color-playbook:     #60A5FA;
+  --color-playbook-bg:  #0C1E3A;
+  --color-playbook-text:#93C5FD;
+
+  --color-recovered:    #34D399;
+  --color-recovered-bg: #062818;
+  --color-recovered-text:#6EE7B7;
+
+  --color-auto:         #2DD4BF;
+  --color-auto-bg:      #042424;
+  --color-auto-text:    #99F6E4;
+
+  --accent:             #3B82F6;
+  --accent-hover:       #2563EB;
+  --accent-text:        #FFFFFF;
+
+  --health-high:        #4ADE80;
+  --health-mid:         #FBBF24;
+  --health-low:         #F87171;
+
+  --border:             rgba(255,255,255,0.08);
+  --border-strong:      rgba(255,255,255,0.14);
+
+  --scrollbar-thumb:    rgba(255,255,255,0.15);
+}
