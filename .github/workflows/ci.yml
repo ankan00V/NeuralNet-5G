@@ -30,8 +30,9 @@ jobs:
           ENABLE_DEV_ENDPOINTS: "true"
           INGESTION_MODE: simulator
           CORS_ORIGINS: "*"
+          PYTHONPATH: ${{ github.workspace }}
         run: |
-          pytest api/tests -q
+          python -m pytest api/tests -q
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -59,8 +60,9 @@ jobs:
           ENABLE_DEV_ENDPOINTS: "true"
           INGESTION_MODE: simulator
           CORS_ORIGINS: "*"
+          PYTHONPATH: ${{ github.workspace }}
         run: |
-          nohup uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/api.log 2>&1 &
+          nohup python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/api.log 2>&1 &
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:8000/api/health/live >/dev/null; then
               exit 0
