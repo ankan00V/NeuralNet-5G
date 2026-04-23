@@ -24,6 +24,14 @@ export default function DispatchTicketPanel({ dispatchTickets = [] }) {
           <span className="font-mono text-[10px] uppercase">Target Site</span>
           <span className="font-medium text-white">{latestTicket.towerId}</span>
         </div>
+        <div className="flex justify-between items-center text-core-textMuted">
+          <span className="font-mono text-[10px] uppercase">Lifecycle</span>
+          <span className="font-medium text-white">{sentenceCase(latestTicket.lifecycleState ?? "assigned")}</span>
+        </div>
+        <div className="flex justify-between items-center text-core-textMuted">
+          <span className="font-mono text-[10px] uppercase">Operator / Region</span>
+          <span className="font-medium text-white">{latestTicket.operator} / {latestTicket.region}</span>
+        </div>
       </div>
     </div>
   );

@@ -126,3 +126,91 @@ async def rollback_incident(
     user: UserPrincipal = Depends(require_permissions("incident:act")),
 ) -> dict:
     return await _transition(request, incident_id, "rolled_back", payload, user)
+
+
+@router.post("/v1/incidents/{incident_id}/close")
+async def close_incident(
+    request: Request,
+    incident_id: str,
+    payload: IncidentActionRequest,
+    user: UserPrincipal = Depends(require_permissions("incident:act")),
+) -> dict:
+    return await _transition(request, incident_id, "closed", payload, user)
+
+
+@router.post("/v1/incidents/{incident_id}/note")
+async def note_incident(
+    request: Request,
+    incident_id: str,
+    payload: IncidentActionRequest,
+    user: UserPrincipal = Depends(require_permissions("incident:act")),
+) -> dict:
+    incident = await request.app.state.incident_workflow.get_incident(incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="incident not found")
+    ensure_tenant_access(user, incident.get("operator"))
+
+    updated = await request.app.state.incident_workflow.append_event(
+        incident_id,
+        "operator_note",
+        user,
+        payload.details,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="incident not found")
+
+    await request.app.state.audit_logger.write(
+        event="incident.note",
+        actor=user,
+        resource=incident_id,
+        action="note",
+        outcome="success",
+        details=payload.details,
+        request_id=getattr(request.state, "request_id", None),
+    )
+
+    return {
+        "status": "ok",
+        "incident_id": incident_id,
+        "incident_status": updated["status"],
+        "updated_at": updated["updated_at"],
+    }
+
+
+@router.post("/v1/incidents/{incident_id}/verify")
+async def verify_incident(
+    request: Request,
+    incident_id: str,
+    payload: IncidentActionRequest,
+    user: UserPrincipal = Depends(require_permissions("incident:act")),
+) -> dict:
+    incident = await request.app.state.incident_workflow.get_incident(incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="incident not found")
+    ensure_tenant_access(user, incident.get("operator"))
+
+    updated = await request.app.state.incident_workflow.append_event(
+        incident_id,
+        "resolution_verified",
+        user,
+        payload.details,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="incident not found")
+
+    await request.app.state.audit_logger.write(
+        event="incident.verify",
+        actor=user,
+        resource=incident_id,
+        action="verify",
+        outcome="success",
+        details=payload.details,
+        request_id=getattr(request.state, "request_id", None),
+    )
+
+    return {
+        "status": "ok",
+        "incident_id": incident_id,
+        "incident_status": updated["status"],
+        "updated_at": updated["updated_at"],
+    }

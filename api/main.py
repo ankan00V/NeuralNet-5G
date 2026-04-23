@@ -12,20 +12,24 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 import numpy as np
 
 from api.audit import AuditLogger
+from api.alerting import AlertDispatcher
 from api.config import AppSettings, ConfigError, load_settings
 from api.middleware import BodySizeLimitMiddleware, RateLimitMiddleware, RequestContextMiddleware, StructuredAccessLogMiddleware
 from api.mongo import MongoStorage
+from api.observability import init_observability, raise_alert, record_inference, render_prometheus_metrics
 from api.recommender import SelfHealingRecommender
-from api.routers import auth, incidents, ingestion, predict, recommend, towers
+from api.routers import auth, incidents, ingestion, operations, predict, recommend, towers
 from api.schemas import KpiSnapshotResponse, TowerStatus
-from api.security import AuthService, UserPrincipal, get_optional_user
+from api.security import AuthService, UserPrincipal, authenticate_websocket, require_permissions
 from api.telemetry import TelemetryBuffer
 from api.websocket_manager import ConnectionManager
 from api.workflow import IncidentWorkflow
 from data.simulator import NetworkSimulator
+from model.forecast import ForecastSettings
 from model.inference import FaultPredictor
 from model.feature_engineering import RAW_FEATURES
 
@@ -97,7 +101,29 @@ async def build_tower_payload(app: FastAPI) -> dict:
     for tower_id, tower_input in windows_by_tower.items():
         row = tower_input["row"]
         window = tower_input["window"]
-        prediction = predictor.predict(window)
+        try:
+            prediction = predictor.predict(window)
+            record_inference(
+                app.state.observability,
+                latency_ms=float(prediction.get("latency_ms", 0.0)),
+                success=True,
+            )
+        except Exception as exc:  # pragma: no cover - defensive path
+            record_inference(
+                app.state.observability,
+                latency_ms=0.0,
+                success=False,
+                failure_reason=str(exc),
+            )
+            raise_alert(
+                app.state.observability,
+                level="error",
+                code="broadcast_inference_error",
+                message="Failed to score tower window during broadcast cycle.",
+                context={"tower_id": tower_id},
+                dispatcher=getattr(app.state, "alert_dispatcher", None),
+            )
+            continue
 
         if app.state.settings.is_demo_mode and row.get("fault_type") and row["fault_type"] != "normal":
             prediction["fault_type"] = row["fault_type"]
@@ -158,6 +184,8 @@ async def build_tower_payload(app: FastAPI) -> dict:
             operator=row.get("operator"),
             profile=row.get("profile"),
             state_phase=row.get("state_phase"),
+            model_version=prediction.get("model_version"),
+            inference_latency_ms=float(prediction.get("latency_ms", 0.0)),
         )
 
         incident = await app.state.incident_workflow.upsert_from_prediction(status_record.model_dump(mode="json"))
@@ -174,6 +202,15 @@ async def build_tower_payload(app: FastAPI) -> dict:
 
     app.state.observability["last_model_version"] = predictor.model_version
     app.state.observability["tower_count"] = len(current_towers)
+    if app.state.settings.is_production_mode and len(current_towers) < app.state.settings.telemetry_min_active_towers:
+        raise_alert(
+            app.state.observability,
+            level="warning",
+            code="telemetry_insufficient",
+            message="Insufficient active towers from telemetry ingestion feed.",
+            context={"active_towers": len(current_towers)},
+            dispatcher=getattr(app.state, "alert_dispatcher", None),
+        )
     if current_towers and app.state.drift_baseline:
         observed = {
             "rsrp": float(np.mean([tower.kpis.rsrp for tower in current_towers.values()])),
@@ -194,6 +231,15 @@ async def build_tower_payload(app: FastAPI) -> dict:
         drift_score = float(sum(z_scores) / len(z_scores)) if z_scores else 0.0
         app.state.observability["drift_score"] = round(drift_score, 4)
         app.state.observability["drift_alert"] = drift_score >= 3.0
+        if app.state.observability["drift_alert"]:
+            raise_alert(
+                app.state.observability,
+                level="warning",
+                code="model_drift_alert",
+                message="Model drift score exceeded alert threshold.",
+                context={"drift_score": app.state.observability["drift_score"]},
+                dispatcher=getattr(app.state, "alert_dispatcher", None),
+            )
 
     storage: MongoStorage | None = app.state.mongo_storage
     if storage is not None:
@@ -213,6 +259,7 @@ async def build_tower_payload(app: FastAPI) -> dict:
                         "top_action": tower.top_action,
                         "status": tower.status,
                         "city": tower.city,
+                        "operator": tower.operator,
                     }
                     await storage.write_trace_log(trace)
         except Exception as exc:  # pragma: no cover - depends on external service
@@ -233,6 +280,8 @@ async def build_tower_payload(app: FastAPI) -> dict:
                         "lead_time_minutes": tower.lead_time_minutes,
                         "top_action": tower.top_action,
                         "status": tower.status,
+                        "city": tower.city,
+                        "operator": tower.operator,
                     },
                 )
         del in_mem[200:]
@@ -250,7 +299,16 @@ async def broadcaster(app: FastAPI) -> None:
         if app.state.simulator is not None and app.state.settings.ingestion_mode in {"simulator", "hybrid"}:
             app.state.simulator.advance_all(steps=max(1, interval))
         payload = await build_tower_payload(app)
-        await app.state.connection_manager.broadcast_json(payload)
+        manager: ConnectionManager = app.state.connection_manager
+        stale_connections = []
+        for websocket, tenant in manager.connections():
+            scoped_payload = _scope_payload_for_tenant(payload, tenant)
+            try:
+                await manager.send_json(websocket, scoped_payload)
+            except Exception:
+                stale_connections.append(websocket)
+        for websocket in stale_connections:
+            manager.disconnect(websocket)
         await asyncio.sleep(interval)
 
 
@@ -279,6 +337,28 @@ async def _enforce_model_gate(app: FastAPI) -> None:
             )
 
 
+def _scope_payload_for_tenant(payload: dict, tenant: str) -> dict:
+    if tenant in {"*", ""}:
+        return payload
+    towers = [tower for tower in payload.get("towers", []) if tower.get("operator") == tenant]
+    return {**payload, "towers": towers}
+
+
+def _trace_visible_for_user(app: FastAPI, record: dict, user: UserPrincipal) -> bool:
+    if user.role == "admin" or user.tenant == "*":
+        return True
+
+    operator = record.get("operator")
+    if operator:
+        return operator == user.tenant
+
+    tower_id = record.get("tower_id")
+    tower = app.state.current_towers.get(tower_id) if tower_id else None
+    if tower is None:
+        return False
+    return tower.operator == user.tenant
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.ready = False
@@ -294,6 +374,8 @@ async def lifespan(app: FastAPI):
 
     settings: AppSettings = app.state.settings
     app.state.predictor = FaultPredictor().load()
+    if settings.is_production_mode and not app.state.predictor.ready:
+        raise RuntimeError("Production mode requires trained model artifacts (MODEL_PATH and SCALER_PATH).")
     app.state.recommender = SelfHealingRecommender()
     app.state.connection_manager = ConnectionManager()
     app.state.current_towers = {}
@@ -309,6 +391,10 @@ async def lifespan(app: FastAPI):
     app.state.mongo_storage = await MongoStorage.connect_from_env()
     app.state.audit_logger = AuditLogger(app.state.mongo_storage, signing_key=settings.audit_signing_key)
     app.state.auth_service = AuthService(settings)
+    app.state.alert_dispatcher = AlertDispatcher(
+        webhook_url=settings.alert_webhook_url,
+        timeout_seconds=settings.alert_webhook_timeout_seconds,
+    )
     app.state.incident_workflow = IncidentWorkflow(
         app.state.mongo_storage,
         open_probability_threshold=settings.fault_open_probability_threshold,
@@ -323,17 +409,8 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("Failed to load drift baseline metadata: %s", exc)
 
-    app.state.observability = {
-        "request_count": 0,
-        "inference_count": 0,
-        "tower_count": 0,
-        "last_request_at": None,
-        "last_request_latency_ms": 0.0,
-        "last_inference_latency_ms": 0.0,
-        "last_model_version": app.state.predictor.model_version,
-        "drift_alert": False,
-        "drift_score": 0.0,
-    }
+    app.state.observability = init_observability(app.state.predictor.model_version)
+    app.state.forecast_settings = ForecastSettings()
 
     if app.state.mongo_storage is not None:
         try:
@@ -352,6 +429,8 @@ async def lifespan(app: FastAPI):
         broadcast_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await broadcast_task
+        if getattr(app.state, "alert_dispatcher", None) is not None:
+            await app.state.alert_dispatcher.close()
         if app.state.mongo_storage is not None:
             await app.state.mongo_storage.close()
 
@@ -395,6 +474,7 @@ app.include_router(towers.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(ingestion.router, prefix="/api")
 app.include_router(incidents.router, prefix="/api")
+app.include_router(operations.router, prefix="/api")
 
 if bootstrap_settings is not None and bootstrap_settings.is_demo_mode:
     app.include_router(predict.router)
@@ -413,12 +493,18 @@ async def liveness() -> dict:
 async def readiness() -> dict:
     ready = bool(getattr(app.state, "ready", False))
     startup_error = getattr(app.state, "startup_error", None)
-    status_label = "ready" if ready else "not-ready"
+    settings = getattr(app.state, "settings", None)
+    active_towers = int(getattr(app.state, "observability", {}).get("tower_count", 0))
+    telemetry_required = int(getattr(settings, "telemetry_min_active_towers", 0)) if settings else 0
+    telemetry_ok = active_towers >= telemetry_required
+    status_label = "ready" if ready and telemetry_ok else "not-ready"
     return {
         "status": status_label,
         "timestamp": datetime.now(UTC).isoformat(),
         "storage": "mongodb" if getattr(app.state, "mongo_storage", None) is not None else "memory",
-        "app_mode": getattr(app.state, "settings", None).app_mode if getattr(app.state, "settings", None) else "unknown",
+        "app_mode": settings.app_mode if settings else "unknown",
+        "active_towers": active_towers,
+        "telemetry_required_towers": telemetry_required,
         "error": startup_error,
     }
 
@@ -436,9 +522,7 @@ async def health_legacy() -> dict:
 
 
 @app.get("/api/v1/audit-log")
-async def audit_log(limit: int = 50, user: UserPrincipal | None = Depends(get_optional_user)) -> dict:
-    if user is None:
-        return {"count": 0, "records": []}
+async def audit_log(limit: int = 50, user: UserPrincipal = Depends(require_permissions("audit:view"))) -> dict:
     records = await app.state.audit_logger.list(limit=min(limit, 200))
     return {
         "count": len(records),
@@ -449,27 +533,115 @@ async def audit_log(limit: int = 50, user: UserPrincipal | None = Depends(get_op
 
 
 @app.get("/api/v1/observability")
-async def observability_snapshot(user: UserPrincipal | None = Depends(get_optional_user)) -> dict:
-    if user is None:
-        return {"status": "unauthenticated"}
+async def observability_snapshot(user: UserPrincipal = Depends(require_permissions("observability:view"))) -> dict:
     obs = dict(app.state.observability)
+    obs["recent_alerts"] = list(obs.get("recent_alerts", []))
     obs["mode"] = app.state.settings.app_mode
     obs["storage"] = "mongodb" if app.state.mongo_storage is not None else "memory"
+    obs["requester"] = {"email": user.email, "role": user.role, "tenant": user.tenant}
     return obs
+
+
+@app.get("/api/v1/model-quality")
+async def model_quality(user: UserPrincipal = Depends(require_permissions("observability:view"))) -> dict:
+    settings: AppSettings = app.state.settings
+    metrics_path = app.state.root / "model" / "metrics.json"
+    if not metrics_path.exists():
+        return {
+            "status": "missing",
+            "model_version": app.state.predictor.model_version,
+            "path": str(metrics_path),
+            "gate": {
+                "enforced": settings.model_gate_enforced,
+                "macro_f1_min_required": settings.model_min_macro_f1,
+                "class_f1_min_required": settings.model_min_class_f1,
+                "pass": False,
+                "reason": "metrics.json missing",
+            },
+        }
+
+    metrics = json.loads(metrics_path.read_text())
+    macro_f1 = float(metrics.get("macro_f1", 0.0))
+    per_class = metrics.get("per_class", {})
+    class_scores = {}
+    class_gate_failures = []
+    for class_name in ("congestion", "coverage_degradation", "hardware_anomaly"):
+        class_f1 = float((per_class.get(class_name) or {}).get("f1-score", 0.0))
+        class_scores[class_name] = class_f1
+        if class_f1 < settings.model_min_class_f1:
+            class_gate_failures.append(class_name)
+
+    macro_pass = macro_f1 >= settings.model_min_macro_f1
+    class_pass = len(class_gate_failures) == 0
+    gate_pass = macro_pass and class_pass
+
+    return {
+        "status": "ok",
+        "model_version": app.state.predictor.model_version,
+        "generated_at": metrics.get("generated_at"),
+        "metrics": {
+            "accuracy": float(metrics.get("accuracy", 0.0)),
+            "macro_f1": macro_f1,
+            "class_f1": class_scores,
+            "class_bias": metrics.get("class_bias"),
+            "class_thresholds": metrics.get("class_thresholds"),
+        },
+        "gate": {
+            "enforced": settings.model_gate_enforced,
+            "macro_f1_min_required": settings.model_min_macro_f1,
+            "class_f1_min_required": settings.model_min_class_f1,
+            "macro_f1_pass": macro_pass,
+            "class_f1_pass": class_pass,
+            "failed_classes": class_gate_failures,
+            "pass": gate_pass,
+        },
+        "requester": {"email": user.email, "role": user.role, "tenant": user.tenant},
+    }
+
+
+@app.get("/api/v1/trace-log")
+async def trace_log(limit: int = 100, user: UserPrincipal = Depends(require_permissions("observability:view"))) -> dict:
+    safe_limit = min(max(1, limit), 200)
+    storage: MongoStorage | None = app.state.mongo_storage
+    if storage is not None:
+        records = await storage.list_trace_log(limit=safe_limit)
+    else:
+        records = app.state.in_mem_trace[:safe_limit]
+
+    scoped_records = [record for record in records if _trace_visible_for_user(app, record, user)]
+    return {
+        "count": len(scoped_records),
+        "records": scoped_records,
+        "requester": {"email": user.email, "role": user.role, "tenant": user.tenant},
+    }
+
+
+@app.get("/metrics")
+async def metrics() -> PlainTextResponse:
+    payload = render_prometheus_metrics(app.state.observability)
+    return PlainTextResponse(payload, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @app.websocket("/api/ws/live")
 @app.websocket("/ws/live")
 async def websocket_live(websocket: WebSocket) -> None:
+    settings: AppSettings = app.state.settings
+    auth_service: AuthService = app.state.auth_service
+    if settings.require_websocket_auth:
+        user = await authenticate_websocket(websocket, settings, auth_service)
+        tenant = user.tenant
+    else:
+        tenant = "*"
+
     manager: ConnectionManager = app.state.connection_manager
-    await manager.connect(websocket)
+    await manager.connect(websocket, tenant=tenant)
     try:
-        initial = {
+        base_payload = {
             "event": "tower_update",
             "timestamp": app.state.last_broadcast_at.isoformat(),
             "towers": [tower.model_dump(mode="json") for tower in app.state.current_towers.values()],
         }
-        await websocket.send_json(initial)
+        await manager.send_json(websocket, _scope_payload_for_tenant(base_payload, tenant))
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:

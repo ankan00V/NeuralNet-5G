@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatProbability, sentenceCase } from "../lib/formatters";
+import { buildApiPath } from "../lib/runtimeConfig";
 
 const pipelineSteps = [
   {
@@ -33,20 +34,85 @@ const telecomKpis = [
   { label: "RTT", detail: "latency pressure" },
 ];
 
-export default function AIProofPanel({ towers }) {
+export default function AIProofPanel({ towers, observability = {} }) {
+  const [forecastSummary, setForecastSummary] = useState(null);
+
   const insight = useMemo(() => {
     const active = towers.filter((tower) => tower.fault_probability > 0.3);
-    const topTower = active.toSorted((left, right) => right.fault_probability - left.fault_probability)[0] ?? null;
+    const sorted = active.toSorted((left, right) => right.fault_probability - left.fault_probability);
+    const topTower = sorted[0] ?? null;
     const averageLeadTime = active.length
       ? Math.round(active.reduce((total, tower) => total + tower.lead_time_minutes, 0) / active.length)
-      : 22;
+      : 0;
+
+    const leadTimes = active.map((tower) => tower.lead_time_minutes);
+    const leadRange = leadTimes.length
+      ? {
+          min: Math.min(...leadTimes),
+          max: Math.max(...leadTimes),
+        }
+      : null;
 
     return {
       topTower,
       activeCount: active.length,
       averageLeadTime,
+      leadRange,
     };
   }, [towers]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadForecast() {
+      if (!insight.topTower?.tower_id) {
+        setForecastSummary(null);
+        return;
+      }
+
+      try {
+        const response = await fetch(buildApiPath(`/api/v1/forecast/${insight.topTower.tower_id}`), {
+          credentials: "include",
+        });
+        if (!response.ok) {
+          setForecastSummary(null);
+          return;
+        }
+
+        const payload = await response.json();
+        const points = Array.isArray(payload.forecast) ? payload.forecast : [];
+        if (!points.length) {
+          setForecastSummary(null);
+          return;
+        }
+
+        const peak = points.reduce(
+          (current, point) =>
+            Number(point.predicted_probability ?? 0) > Number(current.predicted_probability ?? 0) ? point : current,
+          points[0],
+        );
+
+        if (!cancelled) {
+          setForecastSummary({
+            horizonMinutes: Number(payload.forecast_horizon_minutes ?? 0),
+            method: payload.method,
+            peakStep: Number(peak.step_minutes_ahead ?? 0),
+            peakProbability: Number(peak.predicted_probability ?? 0),
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          setForecastSummary(null);
+        }
+      }
+    }
+
+    void loadForecast();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [insight.topTower?.tower_id]);
 
   return (
     <section className="dark-explainer-card mt-6">
@@ -66,9 +132,7 @@ export default function AIProofPanel({ towers }) {
             {pipelineSteps.map((step) => (
               <div key={step.label} className="feature-sub-card">
                 <div className="feature-sub-card__label">{step.label}</div>
-                <div className="feature-sub-card__title">
-                  {step.value}
-                </div>
+                <div className="feature-sub-card__title">{step.value}</div>
                 <p className="feature-sub-card__body">{step.detail}</p>
               </div>
             ))}
@@ -76,10 +140,7 @@ export default function AIProofPanel({ towers }) {
 
           <div className="mt-6 flex flex-wrap gap-2">
             {telecomKpis.map((kpi) => (
-              <div
-                key={kpi.label}
-                className="kpi-tag"
-              >
+              <div key={kpi.label} className="kpi-tag">
                 <strong>{kpi.label}</strong> · {kpi.detail}
               </div>
             ))}
@@ -125,13 +186,21 @@ export default function AIProofPanel({ towers }) {
             </div>
 
             <div className="mt-4">
-              <div className="proof-row">
-                <span className="proof-row__key">Forecast horizon</span>
-                <span className="proof-row__value">15 to 30 minutes</span>
-              </div>
+              {forecastSummary ? (
+                <div className="proof-row">
+                  <span className="proof-row__key">Forecast horizon (model derived)</span>
+                  <span className="proof-row__value">
+                    {forecastSummary.horizonMinutes} min · peak {forecastSummary.peakStep} min @ {formatProbability(forecastSummary.peakProbability)}
+                  </span>
+                </div>
+              ) : null}
               <div className="proof-row">
                 <span className="proof-row__key">Average intervention lead time</span>
-                <span className="proof-row__value">{insight.averageLeadTime} min</span>
+                <span className="proof-row__value">
+                  {insight.leadRange
+                    ? `${insight.averageLeadTime} min (range ${insight.leadRange.min}-${insight.leadRange.max})`
+                    : "No active fault"}
+                </span>
               </div>
               <div className="proof-row">
                 <span className="proof-row__key">Top predicted issue</span>
@@ -139,7 +208,13 @@ export default function AIProofPanel({ towers }) {
                   {insight.topTower ? sentenceCase(insight.topTower.fault_type) : "No active fault"}
                 </span>
               </div>
-              <div className="proof-row" style={{borderBottom: 'none'}}>
+              <div className="proof-row">
+                <span className="proof-row__key">Model version on inference</span>
+                <span className="proof-row__value">
+                  {insight.topTower?.model_version ?? observability.last_model_version ?? "Unavailable"}
+                </span>
+              </div>
+              <div className="proof-row" style={{ borderBottom: "none" }}>
                 <span className="proof-row__key">Top tower risk</span>
                 <span className="proof-row__value">
                   {insight.topTower

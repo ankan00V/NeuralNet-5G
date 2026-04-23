@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, WebSocket, WebSocketException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.config import AppSettings
@@ -26,8 +26,10 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "incident:act",
         "recommend:view",
         "predict:run",
+        "observability:view",
+        "audit:view",
     },
-    "viewer": {"tower:view", "incident:view", "recommend:view"},
+    "viewer": {"tower:view", "incident:view", "recommend:view", "observability:view"},
     "service": {"ingest:write", "tower:view"},
 }
 
@@ -225,3 +227,35 @@ async def require_ingestion_access(
         return user
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ingestion access denied")
+
+
+def _extract_websocket_token(websocket: WebSocket, settings: AppSettings) -> str | None:
+    auth_header = websocket.headers.get("authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        return auth_header.split(" ", 1)[1].strip()
+
+    query_token = websocket.query_params.get("token")
+    if query_token:
+        return query_token
+
+    return websocket.cookies.get(settings.auth_cookie_name)
+
+
+async def authenticate_websocket(websocket: WebSocket, settings: AppSettings, auth_service: AuthService) -> UserPrincipal:
+    if not settings.auth_enabled:
+        return UserPrincipal(
+            subject="system",
+            email="system@internal",
+            name="System",
+            role="admin",
+            tenant="*",
+        )
+
+    token = _extract_websocket_token(websocket, settings)
+    if not token:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication required")
+
+    try:
+        return auth_service.decode_token(token)
+    except HTTPException as exc:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason=exc.detail) from exc

@@ -73,7 +73,7 @@ export default function Towers() {
           <table className="min-w-full border-collapse">
             <thead className="border-b border-[var(--border)] bg-[var(--bg-surface)]">
               <tr className="text-left">
-                {["ID", "Status", "RSRP", "SINR", "DL Throughput", "Fault Probability", "Confidence", "Predicted Fault", "Last Updated"].map(
+                {["ID", "Status", "RSRP", "SINR", "DL Throughput", "Fault Probability", "Confidence", "Predicted Fault", "Model", "Last Updated"].map(
                   (column) => (
                     <th
                       key={column}
@@ -137,6 +137,9 @@ export default function Towers() {
                   </td>
                   <td className="px-5 py-4 text-[13px] tracking-wide text-[var(--text-secondary)]">
                     {sentenceCase(tower.fault_type)}
+                  </td>
+                  <td className="px-5 py-4 text-[11px] font-mono tracking-wider text-[var(--text-secondary)]">
+                    {tower.model_version ?? "unknown"}
                   </td>
                   <td className="px-5 py-4 text-[11px] font-mono tracking-wider text-[var(--text-secondary)]">
                     {formatTimestamp(tower.last_updated ?? tower.kpis.timestamp)}

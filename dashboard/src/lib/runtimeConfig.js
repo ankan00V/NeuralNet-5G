@@ -10,8 +10,6 @@ export const appMode = rawAppMode || (legacyDemoFlag === "true" ? "demo" : "prod
 export const apiBaseUrl = normalizeBase(import.meta.env.VITE_API_BASE_URL ?? "");
 export const wsUrlOverride = import.meta.env.VITE_WS_URL ?? "";
 export const isDemoModeEnabled = appMode === "demo";
-export const isDemoAuthBypassEnabled =
-  isDemoModeEnabled && (import.meta.env.VITE_DEMO_AUTH_BYPASS ?? "false").toLowerCase() === "true";
 export const googleMapsApiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? "").trim();
 
 export function buildApiPath(path) {

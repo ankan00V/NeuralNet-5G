@@ -20,15 +20,27 @@ FAULT_TYPES = ["normal", "congestion", "coverage_degradation", "hardware_anomaly
 class FaultLSTM(nn.Module):
     def __init__(self) -> None:
         super().__init__()
+        hidden_size = 128
         self.lstm = nn.LSTM(
             input_size=INPUT_SIZE,
-            hidden_size=128,
+            hidden_size=hidden_size,
             num_layers=2,
             dropout=0.3,
             batch_first=True,
+            bidirectional=True,
+        )
+        output_size = hidden_size * 2
+        self.attention = nn.Sequential(
+            nn.Linear(output_size, 64),
+            nn.Tanh(),
+            nn.Linear(64, 1),
         )
         self.classifier = nn.Sequential(
-            nn.Linear(128, 64),
+            nn.LayerNorm(output_size * 2),
+            nn.Linear(output_size * 2, 256),
+            nn.ReLU(),
+            nn.Dropout(0.25),
+            nn.Linear(256, 64),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(64, 4),
@@ -36,7 +48,12 @@ class FaultLSTM(nn.Module):
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         output, _ = self.lstm(features)
-        return self.classifier(output[:, -1, :])
+        attention_logits = self.attention(output).squeeze(-1)
+        attention_weights = torch.softmax(attention_logits, dim=1).unsqueeze(-1)
+        context = torch.sum(output * attention_weights, dim=1)
+        tail = output[:, -1, :]
+        pooled = torch.cat([context, tail], dim=-1)
+        return self.classifier(pooled)
 
 
 class FaultPredictor:
@@ -47,6 +64,7 @@ class FaultPredictor:
         self.ready = False
         self.model_version = "heuristic-v1"
         self.class_bias = np.zeros(len(FAULT_TYPES), dtype=np.float32)
+        self.class_thresholds = np.asarray([0.0, 0.25, 0.20, 0.35], dtype=np.float32)
 
     def load(
         self,
@@ -74,10 +92,22 @@ class FaultPredictor:
                 bias = payload.get("class_bias", [0.0] * len(FAULT_TYPES))
                 if isinstance(bias, list) and len(bias) == len(FAULT_TYPES):
                     self.class_bias = np.asarray(bias, dtype=np.float32)
+                thresholds = payload.get("class_thresholds", self.class_thresholds.tolist())
+                if isinstance(thresholds, list) and len(thresholds) == len(FAULT_TYPES):
+                    self.class_thresholds = np.asarray(thresholds, dtype=np.float32)
             except Exception:
                 self.class_bias = np.zeros(len(FAULT_TYPES), dtype=np.float32)
+                self.class_thresholds = np.asarray([0.0, 0.25, 0.20, 0.35], dtype=np.float32)
 
         return self
+
+    def _decode_label_index(self, probabilities: np.ndarray) -> int:
+        thresholds = self.class_thresholds
+        margins = probabilities[1:] - thresholds[1:]
+        fault_index = int(np.argmax(margins))
+        if float(margins[fault_index]) >= 0.0:
+            return fault_index + 1
+        return 0
 
     def _load_model_version(self, root: Path) -> str:
         metadata_path = root / "model" / "train_metadata.json"
@@ -201,7 +231,7 @@ class FaultPredictor:
             probabilities = np.exp(logits_np) / np.sum(np.exp(logits_np))
         latency_ms = (time.perf_counter() - started) * 1000
 
-        best_index = int(np.argmax(probabilities))
+        best_index = self._decode_label_index(probabilities)
         fault_probability = float(probabilities[best_index])
         return {
             "fault_probability": fault_probability,
@@ -231,30 +261,8 @@ class FaultPredictor:
         return self._model_predict(kpi_window)
 
     def explain(self, kpi_window: list[list[float]]) -> dict[str, Any]:
-        prediction = self.predict(kpi_window)
         if not self.ready or self.model is None or self.scaler is None:
-            history = np.asarray(kpi_window, dtype=np.float32)
-            scores = self._heuristic_scores(history)
-            probabilities = self._heuristic_probabilities(scores)
-
-            feature_scores = {
-                "rsrp": max(0.0, (history[:10, 0].mean() - history[-10:, 0].mean()) / 10.0),
-                "sinr": max(0.0, (history[:10, 1].mean() - history[-10:, 1].mean()) / 8.0),
-                "dl_throughput": max(0.0, (history[:10, 2].mean() - history[-10:, 2].mean()) / 120.0),
-                "ul_throughput": max(0.0, (history[:10, 3].mean() - history[-10:, 3].mean()) / 40.0),
-                "ho_failure_rate": max(0.0, (history[-10:, 4].mean() - history[:10, 4].mean()) / 10.0),
-                "rtt": max(0.0, (history[-10:, 5].mean() - history[:10, 5].mean()) / 160.0),
-            }
-            total = sum(feature_scores.values()) or 1.0
-            attributions = {name: score / total for name, score in feature_scores.items()}
-            return {
-                "model": self.model_version,
-                "method": "heuristic-feature-contribution",
-                "base_value": probabilities.get("normal", 0.0),
-                "output_value": prediction["fault_probability"],
-                "attributions": attributions,
-                "note": "Feature impact derived from heuristic drift decomposition over the latest KPI window.",
-            }
+            raise RuntimeError("Explainability requires trained model artifacts")
 
         raw_features = np.asarray(kpi_window, dtype=np.float32)
         engineered = engineer_sequence_features(raw_features)
@@ -266,7 +274,8 @@ class FaultPredictor:
         bias_tensor = torch.tensor(self.class_bias, dtype=torch.float32, device=self.device).unsqueeze(0)
         adjusted_logits = logits + bias_tensor
         probabilities = torch.softmax(adjusted_logits, dim=-1)
-        selected_class = int(torch.argmax(probabilities, dim=-1).item())
+        probabilities_np = probabilities.detach().cpu().numpy()[0]
+        selected_class = self._decode_label_index(probabilities_np)
         selected_probability = probabilities[0, selected_class]
 
         self.model.zero_grad(set_to_none=True)

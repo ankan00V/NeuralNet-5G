@@ -11,6 +11,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from api.observability import record_http_request
+
 
 class BodySizeLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, max_bytes: int) -> None:
@@ -75,14 +77,16 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         observability = getattr(request.app.state, "observability", None)
         if observability is None:
             observability = {
-                "request_count": 0,
-                "last_request_at": None,
-                "last_request_latency_ms": 0.0,
+                "http_request_totals": {},
             }
             request.app.state.observability = observability
-        observability["request_count"] += 1
-        observability["last_request_at"] = datetime.now(UTC).isoformat()
-        observability["last_request_latency_ms"] = latency_ms
+        record_http_request(
+            observability,
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            latency_ms=latency_ms,
+        )
         response.headers["x-request-id"] = request_id
         return response
 

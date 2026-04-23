@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from api.observability import raise_alert, record_inference
 from api.schemas import ExplainAttribution, ExplainResponse, ForecastPoint, ForecastResponse, KpiWindow, PredictionResponse
-from api.security import UserPrincipal, require_permissions
+from api.security import UserPrincipal, ensure_tenant_access, require_permissions
+from model.forecast import forecast_fault_probability
 
 
 router = APIRouter()
@@ -18,12 +20,39 @@ async def predict(
     payload: KpiWindow,
     user: UserPrincipal = Depends(require_permissions("predict:run")),
 ) -> PredictionResponse:
+    settings = request.app.state.settings
+    tower = request.app.state.current_towers.get(payload.tower_id)
+    if tower is not None:
+        ensure_tenant_access(user, tower.operator)
+    elif settings.is_production_mode and user.role != "admin" and user.tenant != "*":
+        raise HTTPException(status_code=404, detail="Tower not found in live state")
+
     predictor = request.app.state.predictor
-    prediction = predictor.predict(payload.kpi_window)
+    try:
+        prediction = predictor.predict(payload.kpi_window)
+    except Exception as exc:
+        record_inference(
+            request.app.state.observability,
+            latency_ms=0.0,
+            success=False,
+            failure_reason=str(exc),
+        )
+        raise_alert(
+            request.app.state.observability,
+            level="error",
+            code="predict_endpoint_failure",
+            message="Prediction endpoint failed to score request payload.",
+            context={"tower_id": payload.tower_id},
+            dispatcher=getattr(request.app.state, "alert_dispatcher", None),
+        )
+        raise HTTPException(status_code=503, detail="Prediction inference failed") from exc
 
     request.app.state.observability["last_model_version"] = prediction.get("model_version")
-    request.app.state.observability["last_inference_latency_ms"] = prediction.get("latency_ms", 0.0)
-    request.app.state.observability["inference_count"] += 1
+    record_inference(
+        request.app.state.observability,
+        latency_ms=float(prediction.get("latency_ms", 0.0)),
+        success=True,
+    )
 
     await request.app.state.audit_logger.write(
         event="prediction.run",
@@ -59,6 +88,7 @@ async def explain_prediction(
     status_row = request.app.state.current_towers.get(tower_id)
     if not status_row:
         raise HTTPException(status_code=404, detail="Tower not found in live state")
+    ensure_tenant_access(user, status_row.operator)
 
     simulator = request.app.state.simulator
     telemetry_buffer = request.app.state.telemetry_buffer
@@ -69,10 +99,27 @@ async def explain_prediction(
     if window is None and simulator is not None:
         window = simulator.get_latest_window(tower_id)
     if window is None:
-        window = [[status_row.kpis.rsrp, status_row.kpis.sinr, status_row.kpis.dl_throughput, status_row.kpis.ul_throughput, status_row.kpis.ho_failure_rate, status_row.kpis.rtt] for _ in range(30)]
+        raise HTTPException(status_code=503, detail="Telemetry window unavailable for explainability")
 
     predictor = request.app.state.predictor
-    details = predictor.explain(window)
+    if not predictor.ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Explainability requires trained model artifacts.",
+        )
+
+    try:
+        details = predictor.explain(window)
+    except Exception as exc:
+        raise_alert(
+            request.app.state.observability,
+            level="error",
+            code="explain_endpoint_failure",
+            message="Explainability endpoint failed to generate attribution payload.",
+            context={"tower_id": tower_id},
+            dispatcher=getattr(request.app.state, "alert_dispatcher", None),
+        )
+        raise HTTPException(status_code=503, detail="Explainability inference failed") from exc
 
     await request.app.state.audit_logger.write(
         event="prediction.explain",
@@ -113,34 +160,34 @@ async def forecast_prediction(
     status_row = request.app.state.current_towers.get(tower_id)
     if not status_row:
         raise HTTPException(status_code=404, detail="Tower not found in live state")
+    ensure_tenant_access(user, status_row.operator)
 
-    history = list(status_row.kpi_history)[-8:]
-    if len(history) < 2:
-        history = [status_row.kpis, status_row.kpis]
-
-    rtt_delta = history[-1].rtt - history[0].rtt
-    ho_delta = history[-1].ho_failure_rate - history[0].ho_failure_rate
-    dl_delta = history[-1].dl_throughput - history[0].dl_throughput
-    sinr_delta = history[-1].sinr - history[0].sinr
-
-    trend_signal = (rtt_delta / 160.0) + (ho_delta / 8.0) - (dl_delta / 500.0) - (sinr_delta / 30.0)
-    step_delta = max(-0.04, min(0.06, trend_signal * 0.015))
-
-    base = float(status_row.fault_probability)
-    now = datetime.now(UTC)
-    points: list[ForecastPoint] = []
-    for step in range(1, 11):
-        projected = max(0.01, min(0.99, base + (step * step_delta)))
-        spread = min(0.35, 0.03 + step * 0.01)
-        points.append(
-            ForecastPoint(
-                step_minutes_ahead=step * 5,
-                timestamp=now + timedelta(minutes=step * 5),
-                predicted_probability=round(projected, 4),
-                confidence_lower=round(max(0.0, projected - spread), 4),
-                confidence_upper=round(min(1.0, projected + spread), 4),
-            )
+    predictor = request.app.state.predictor
+    if not predictor.ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Forecast endpoint requires trained model artifacts.",
         )
+
+    try:
+        points = [
+            ForecastPoint(**entry)
+            for entry in forecast_fault_probability(
+                predictor,
+                list(status_row.kpi_history),
+                settings=request.app.state.forecast_settings,
+            )
+        ]
+    except Exception as exc:
+        raise_alert(
+            request.app.state.observability,
+            level="error",
+            code="forecast_endpoint_failure",
+            message="Forecast endpoint failed to generate model-based horizon projections.",
+            context={"tower_id": tower_id},
+            dispatcher=getattr(request.app.state, "alert_dispatcher", None),
+        )
+        raise HTTPException(status_code=503, detail="Forecast inference failed") from exc
 
     await request.app.state.audit_logger.write(
         event="prediction.forecast",
@@ -148,13 +195,13 @@ async def forecast_prediction(
         resource=tower_id,
         action="forecast",
         outcome="success",
-        details={"method": "kpi-trend-extrapolation", "steps": 10},
+        details={"method": "model-monte-carlo", "steps": len(points)},
         request_id=getattr(request.state, "request_id", None),
     )
 
     return ForecastResponse(
         tower_id=tower_id,
-        forecast_horizon_minutes=50,
+        forecast_horizon_minutes=len(points) * request.app.state.forecast_settings.step_minutes,
         forecast=points,
-        method="kpi-trend-extrapolation",
+        method="model-monte-carlo",
     )

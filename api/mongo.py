@@ -169,7 +169,7 @@ class MongoStorage:
     async def list_incidents(self, limit: int = 100, include_closed: bool = False) -> list[dict]:
         query: dict[str, Any] = {}
         if not include_closed:
-            query["status"] = {"$in": ["open", "acknowledged", "dispatched", "failed", "rolled_back"]}
+            query["status"] = {"$in": ["open", "acknowledged", "dispatched", "remediated", "failed", "rolled_back"]}
         return await (
             self.incidents.find(query, {"_id": 0}).sort("updated_at", -1).limit(limit).to_list(length=limit)
         )

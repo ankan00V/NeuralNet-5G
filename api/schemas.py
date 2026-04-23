@@ -79,6 +79,8 @@ class TowerStatus(BaseModel):
     profile: str | None = None
     state_phase: str | None = None
     incident_id: str | None = None
+    model_version: str | None = None
+    inference_latency_ms: float | None = None
 
 
 class TowerListResponse(BaseModel):
@@ -176,6 +178,17 @@ class ForecastResponse(BaseModel):
     forecast_horizon_minutes: int
     forecast: list[ForecastPoint]
     method: str
+
+
+class ServiceMetricsResponse(BaseModel):
+    auto_resolved_count: int
+    downtime_avoided_minutes: int
+    users_protected: int
+    cost_saved: int
+    active_dispatches: int
+    open_incidents: int
+    source: Literal["server"] = "server"
+    updated_at: datetime
 
 
 class IncidentEvent(BaseModel):

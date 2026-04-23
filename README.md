@@ -35,6 +35,7 @@ AUTH_USERS_JSON=[{"email":"ops@neuralnet5g.ai","name":"NOC Lead","role":"admin",
 APP_MODE=demo
 ENABLE_DEV_ENDPOINTS=false
 INGESTION_MODE=simulator
+REQUIRE_WEBSOCKET_AUTH=true
 ENV
 ```
 
@@ -95,6 +96,9 @@ TOKEN=$(curl -s https://neuralnet5g.test/api/v1/auth/login \
 curl -s https://neuralnet5g.test/api/towers -H "Authorization: Bearer $TOKEN" | jq '.towers | length'
 curl -s https://neuralnet5g.test/api/v1/explain/TOWER_001 -H "Authorization: Bearer $TOKEN" | jq '{method, model, top: .attributions[0:3]}'
 curl -s https://neuralnet5g.test/api/v1/observability -H "Authorization: Bearer $TOKEN" | jq
+curl -s https://neuralnet5g.test/api/v1/model-quality -H "Authorization: Bearer $TOKEN" | jq
+curl -s https://neuralnet5g.test/api/v1/trace-log -H "Authorization: Bearer $TOKEN" | jq '.count'
+curl -s https://neuralnet5g.test/metrics | head -40
 ```
 
 4. Guardrail proof (dev endpoint disabled unless explicit demo+flag)
@@ -127,22 +131,23 @@ curl -s https://neuralnet5g.test/api/v1/ingest/telemetry \
 
 ## Current Scorecard (Transparent Baseline)
 
-Latest `model/metrics.json` generated at `2026-04-19T18:03:20Z`:
-- `accuracy`: 0.2708
-- `macro_f1`: 0.2579
-- `coverage_degradation f1`: 0.2429
-- `hardware_anomaly f1`: 0.2632
+Latest `model/metrics.json` generated at `2026-04-20T08:16:00Z`:
+- `accuracy`: 0.3428
+- `macro_f1`: 0.3159
+- `congestion f1`: 0.4918
+- `coverage_degradation f1`: 0.2947
+- `hardware_anomaly f1`: 0.3323
 
 Interpretation:
 - This is acceptable for architecture/demo validation.
 - This is not yet production-acceptable for minority fault classes.
-- The platform includes a deployment gate (`ENFORCE_MODEL_GATE`) so production startup can be blocked if model KPIs are below thresholds.
+- The platform enforces model quality gates in production (`ENFORCE_MODEL_GATE=true` by default in `APP_MODE=prod`) and blocks startup when KPIs miss thresholds.
 
 ## What Was Hardened
 
 ### Explainability and forecast credibility
-- Prediction explainability is generated from model signals (`gradient-x-input`) or deterministic heuristic decomposition fallback, not pseudo-random values.
-- Forecast API is behind `ENABLE_FORECAST_ENDPOINT` and returns `404` when disabled.
+- Prediction explainability in production requires trained model artifacts and uses model signals (`gradient-x-input`).
+- Forecast API uses model-driven Monte Carlo horizon scoring and remains behind `ENABLE_FORECAST_ENDPOINT` (returns `404` when disabled).
 
 ### Auth, RBAC, tenancy, and audit
 - Login/session endpoints:
@@ -152,6 +157,12 @@ Interpretation:
 - Role/permission checks for tower, prediction, recommendation, incident, and ingest paths.
 - Tenant checks prevent cross-operator actions for non-admin roles.
 - Signed audit records exposed via `GET /api/v1/audit-log`.
+- Prediction trace records exposed via `GET /api/v1/trace-log` (tenant-scoped).
+
+### Observability and alerting
+- Prometheus metrics endpoint: `GET /metrics`.
+- Model drift score + drift alert state are tracked and exposed in observability payloads.
+- Optional outbound alert webhook (`ALERT_WEBHOOK_URL`) forwards structured alert events to external tooling.
 
 ### Demo isolation and unsafe routes
 - Demo behaviors are mode-gated in frontend (`VITE_APP_MODE`) and backend (`APP_MODE`).
@@ -166,7 +177,8 @@ Interpretation:
 - Google Maps key must come from env (`VITE_GOOGLE_MAPS_API_KEY`), no embedded fallback key.
 
 ### Ingestion path beyond simulator
-- `INGESTION_MODE` supports `simulator`, `hybrid`, and `external`.
+- `INGESTION_MODE` supports `simulator`, `hybrid`, and `external` in demo workflows.
+- In production (`APP_MODE=prod`), ingestion is locked to `INGESTION_MODE=external` and requires `INGESTION_API_KEYS`.
 - External ingestion endpoints:
   - `POST /api/v1/ingest/telemetry`
   - `POST /api/v1/ingest/telemetry/batch`
@@ -192,9 +204,12 @@ Interpretation:
 
 - `APP_MODE=prod`
   - Auth must be enabled.
+  - WebSocket auth must be enabled.
   - Wildcard CORS rejected.
   - Dev endpoints forbidden.
   - Audit signing key required.
+  - External ingestion feed and ingestion keys are required.
+  - Model quality gate is mandatory.
 
 ## Environment Variables
 
@@ -207,6 +222,10 @@ Backend (`.env`):
 - `ENABLE_DEV_ENDPOINTS=true|false`
 - `INGESTION_MODE=simulator|hybrid|external`
 - `INGESTION_API_KEYS=key1,key2`
+- `REQUIRE_WEBSOCKET_AUTH=true|false`
+- `TELEMETRY_MIN_ACTIVE_TOWERS=0`
+- `ALERT_WEBHOOK_URL=`
+- `ALERT_WEBHOOK_TIMEOUT_SECONDS=2.0`
 - `ENFORCE_MODEL_GATE=true|false`
 - `MODEL_MIN_MACRO_F1=...`
 - `MODEL_MIN_CLASS_F1=...`
@@ -217,7 +236,6 @@ Frontend (`dashboard/.env`):
 - `VITE_API_BASE_URL=`
 - `VITE_WS_URL=`
 - `VITE_GOOGLE_MAPS_API_KEY=`
-- `VITE_DEMO_AUTH_BYPASS=true|false`
 
 ## Testing and Verification
 

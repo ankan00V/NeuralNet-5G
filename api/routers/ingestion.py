@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from api.observability import raise_alert
 from api.schemas import TelemetryBatchRequest, TelemetryIngestRequest
 from api.security import UserPrincipal, require_ingestion_access
 
@@ -25,6 +26,7 @@ async def ingest_single_telemetry(
         )
 
     request.app.state.telemetry_buffer.ingest(payload.model_dump())
+    request.app.state.observability["telemetry_last_ingested_at"] = datetime.now(UTC).isoformat()
     await request.app.state.audit_logger.write(
         event="ingestion.telemetry",
         actor=identity,
@@ -52,6 +54,17 @@ async def ingest_batch_telemetry(
 
     for event in payload.events:
         request.app.state.telemetry_buffer.ingest(event.model_dump())
+    request.app.state.observability["telemetry_last_ingested_at"] = datetime.now(UTC).isoformat()
+
+    if len(payload.events) >= 200:
+        raise_alert(
+            request.app.state.observability,
+            level="info",
+            code="ingestion_high_volume_batch",
+            message="High-volume telemetry batch ingested.",
+            context={"count": len(payload.events)},
+            dispatcher=getattr(request.app.state, "alert_dispatcher", None),
+        )
 
     await request.app.state.audit_logger.write(
         event="ingestion.telemetry",

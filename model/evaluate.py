@@ -15,7 +15,7 @@ import torch
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score, precision_recall_fscore_support
 
 from model.inference import FAULT_TYPES, FaultLSTM
-from model.train import PREDICTION_HORIZON_END, PREDICTION_HORIZON_START, build_sequence_frame
+from model.train import PREDICTION_HORIZON_END, PREDICTION_HORIZON_START, TRAIN_RATIO, VAL_RATIO, build_sequence_frame
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -37,8 +37,8 @@ def split_dataset_with_metadata(sequence_frame: pd.DataFrame) -> dict[str, dict[
     for tower_id, group in sequence_frame.groupby("tower_id"):
         ordered = group.sort_values("timestamp").reset_index(drop=True)
         total = len(ordered)
-        train_end = int(total * 0.8)
-        val_end = int(total * 0.9)
+        train_end = int(total * TRAIN_RATIO)
+        val_end = int(total * VAL_RATIO)
 
         partitions["train_x"].extend(ordered.iloc[:train_end]["features"].tolist())
         partitions["train_y"].extend(ordered.iloc[:train_end]["label"].tolist())
@@ -161,6 +161,22 @@ def summarize_site_metrics(site_metrics: dict[str, dict]) -> dict[str, list[dict
     return {"worst_sites": worst, "best_sites": best}
 
 
+def softmax(logits: np.ndarray) -> np.ndarray:
+    logits_max = np.max(logits, axis=1, keepdims=True)
+    exp_logits = np.exp(logits - logits_max)
+    return exp_logits / np.sum(exp_logits, axis=1, keepdims=True)
+
+
+def decode_with_thresholds(probabilities: np.ndarray, thresholds: np.ndarray) -> np.ndarray:
+    margins = probabilities[:, 1:] - thresholds[1:]
+    fault_choice = np.argmax(margins, axis=1)
+    best_margin = margins[np.arange(len(probabilities)), fault_choice]
+    predictions = np.zeros(len(probabilities), dtype=np.int64)
+    take_fault = best_margin >= 0.0
+    predictions[take_fault] = fault_choice[take_fault] + 1
+    return predictions
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     os.environ.setdefault("MPLCONFIGDIR", str(root / ".mplconfig"))
@@ -206,22 +222,45 @@ def main() -> None:
     val_logits = infer_logits(scaled_val)
     test_logits = infer_logits(scaled_test)
 
-    bias_candidates = [-0.5, -0.25, 0.0, 0.25, 0.5]
+    bias_candidates = [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]
     best_bias = np.zeros(len(FAULT_TYPES), dtype=np.float32)
     best_val_f1 = -1.0
+    best_val_objective = -1.0
     for congestion_bias, coverage_bias, hardware_bias in product(bias_candidates, repeat=3):
         candidate = np.asarray([0.0, congestion_bias, coverage_bias, hardware_bias], dtype=np.float32)
         val_predictions = np.argmax(val_logits + candidate, axis=1)
         candidate_f1 = f1_score(val_y, val_predictions, average="macro", zero_division=0)
-        if candidate_f1 > best_val_f1:
+        candidate_minority = f1_score(val_y, val_predictions, labels=[1, 2, 3], average="macro", zero_division=0)
+        candidate_objective = 0.4 * candidate_f1 + 0.6 * candidate_minority
+        if candidate_objective > best_val_objective:
             best_val_f1 = candidate_f1
+            best_val_objective = candidate_objective
             best_bias = candidate
 
+    adjusted_val_logits = val_logits + best_bias
     adjusted_test_logits = test_logits + best_bias
-    logits_max = np.max(adjusted_test_logits, axis=1, keepdims=True)
-    exp_logits = np.exp(adjusted_test_logits - logits_max)
-    probabilities = exp_logits / np.sum(exp_logits, axis=1, keepdims=True)
-    predictions = np.argmax(adjusted_test_logits, axis=1)
+    val_probabilities = softmax(adjusted_val_logits)
+    probabilities = softmax(adjusted_test_logits)
+
+    threshold_candidates = np.linspace(0.15, 0.75, 13)
+    best_thresholds = np.asarray([0.0, 0.25, 0.20, 0.35], dtype=np.float32)
+    best_threshold_f1 = -1.0
+    best_threshold_objective = -1.0
+    for congestion_threshold, coverage_threshold, hardware_threshold in product(threshold_candidates, repeat=3):
+        candidate_thresholds = np.asarray(
+            [0.0, congestion_threshold, coverage_threshold, hardware_threshold],
+            dtype=np.float32,
+        )
+        val_predictions = decode_with_thresholds(val_probabilities, candidate_thresholds)
+        candidate_f1 = f1_score(val_y, val_predictions, average="macro", zero_division=0)
+        candidate_minority = f1_score(val_y, val_predictions, labels=[1, 2, 3], average="macro", zero_division=0)
+        candidate_objective = 0.4 * candidate_f1 + 0.6 * candidate_minority
+        if candidate_objective > best_threshold_objective:
+            best_threshold_f1 = candidate_f1
+            best_threshold_objective = candidate_objective
+            best_thresholds = candidate_thresholds
+
+    predictions = decode_with_thresholds(probabilities, best_thresholds)
 
     report = classification_report(test_y, predictions, target_names=FAULT_TYPES, output_dict=True, zero_division=0)
     site_metrics = per_site_metrics(test_tower_ids, test_y, predictions)
@@ -251,7 +290,11 @@ def main() -> None:
         "operator_metrics": operator_metrics,
         "site_metrics_summary": summarize_site_metrics(site_metrics),
         "class_bias": [float(value) for value in best_bias.tolist()],
-        "val_macro_f1_after_calibration": float(best_val_f1),
+        "class_thresholds": [float(value) for value in best_thresholds.tolist()],
+        "val_macro_f1_after_bias_calibration": float(best_val_f1),
+        "val_objective_after_bias_calibration": float(best_val_objective),
+        "val_macro_f1_after_threshold_calibration": float(best_threshold_f1),
+        "val_objective_after_threshold_calibration": float(best_threshold_objective),
         "window_size": 30,
         "prediction_horizon_minutes": [PREDICTION_HORIZON_START, PREDICTION_HORIZON_END],
         "test_sequences": int(len(test_y)),
@@ -265,7 +308,11 @@ def main() -> None:
         json.dumps(
             {
                 "class_bias": [float(value) for value in best_bias.tolist()],
-                "val_macro_f1_after_calibration": float(best_val_f1),
+                "class_thresholds": [float(value) for value in best_thresholds.tolist()],
+                "val_macro_f1_after_bias_calibration": float(best_val_f1),
+                "val_objective_after_bias_calibration": float(best_val_objective),
+                "val_macro_f1_after_threshold_calibration": float(best_threshold_f1),
+                "val_objective_after_threshold_calibration": float(best_threshold_objective),
                 "generated_at": datetime.now(UTC).isoformat(),
             },
             indent=2,

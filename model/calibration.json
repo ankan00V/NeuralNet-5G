@@ -1,10 +1,19 @@
 {
   "class_bias": [
     0.0,
-    0.5,
-    -0.5,
-    -0.25
+    0.0,
+    0.0,
+    0.0
   ],
-  "val_macro_f1_after_calibration": 0.25566083480616875,
-  "generated_at": "2026-04-19T18:03:20.204896+00:00"
+  "class_thresholds": [
+    0.0,
+    0.30000001192092896,
+    0.30000001192092896,
+    0.30000001192092896
+  ],
+  "val_macro_f1_after_bias_calibration": 0.3250954942222771,
+  "val_objective_after_bias_calibration": 0.3044055578446805,
+  "val_macro_f1_after_threshold_calibration": 0.28766916654589575,
+  "val_objective_after_threshold_calibration": 0.2921414884315248,
+  "generated_at": "2026-04-20T08:16:00.152373+00:00"
 }

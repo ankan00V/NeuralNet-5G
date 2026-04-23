@@ -104,6 +104,20 @@ class IncidentWorkflow:
         await self._save(incident)
         return incident
 
+    async def append_event(
+        self,
+        incident_id: str,
+        event_name: str,
+        actor: UserPrincipal,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        incident = await self.get_incident(incident_id)
+        if incident is None:
+            return None
+        incident.setdefault("history", []).append(self._event(event_name, actor, details))
+        await self._save(incident)
+        return incident
+
     async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
         if self.storage is not None:
             return await self.storage.get_incident(incident_id)

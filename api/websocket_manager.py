@@ -19,6 +19,9 @@ class ConnectionManager:
     def connections(self) -> list[tuple[WebSocket, str]]:
         return list(self.active_connections.items())
 
+    async def send_json(self, websocket: WebSocket, payload: dict) -> None:
+        await websocket.send_json(payload)
+
     async def broadcast(self, message: str) -> None:
         stale_connections = []
         for connection in self.active_connections:

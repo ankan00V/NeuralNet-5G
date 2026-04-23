@@ -3,7 +3,7 @@ import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom"
 import AccessPortal from "./components/AccessPortal";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { useLiveNetwork } from "./context/WebSocketContext";
-import { buildApiPath, isDemoAuthBypassEnabled } from "./lib/runtimeConfig";
+import { buildApiPath } from "./lib/runtimeConfig";
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Towers = lazy(() => import("./pages/Towers"));
@@ -94,16 +94,6 @@ export default function App() {
   }, [towers]);
 
   async function handleLogin(credentials) {
-    if (isDemoAuthBypassEnabled) {
-      setSession({
-        operator: credentials.operator,
-        role: "admin",
-        name: credentials.email,
-        email: credentials.email,
-      });
-      return;
-    }
-
     const response = await fetch(buildApiPath("/api/v1/auth/login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -25,6 +25,18 @@ const drillCatalog = [
   },
 ];
 
+const SUBSCRIBERS_BY_PROFILE = {
+  urban_core: 3400,
+  dense_urban: 4200,
+  enterprise: 2600,
+  transit_hub: 3100,
+  suburban: 1850,
+  coastal_core: 2400,
+  tech_corridor: 2900,
+  growth_corridor: 2200,
+  suburban_mix: 2100,
+};
+
 export default function MissionControlPanel({ session, towers, cycleCount, dataMode, demoEnabled = false, onInjectDrill, onRecover }) {
   const [busyFaultType, setBusyFaultType] = useState("");
   const [resolvedFaultType, setResolvedFaultType] = useState("");
@@ -36,7 +48,7 @@ export default function MissionControlPanel({ session, towers, cycleCount, dataM
     const topTower = sorted[0] ?? null;
     const active = towers.filter((tower) => tower.fault_probability > 0.3);
     const impactedSubscribers = active.reduce(
-      (total, tower, index) => total + Math.round(180 + tower.fault_probability * 420 + index * 6),
+      (total, tower) => total + Math.round((SUBSCRIBERS_BY_PROFILE[tower.profile] ?? 2200) * tower.fault_probability),
       0,
     );
     const automationCoverage = Math.round(

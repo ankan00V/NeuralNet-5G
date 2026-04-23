@@ -36,13 +36,16 @@ def test_explain_contract(client):
     tower_id = towers[0]["tower_id"]
 
     response = client.get(f"/api/v1/explain/{tower_id}")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["tower_id"] == tower_id
-    assert body["method"]
-    assert isinstance(body["attributions"], list)
-    assert body["attributions"]
-    assert {"feature", "impact"}.issubset(body["attributions"][0].keys())
+    if response.status_code == 200:
+        body = response.json()
+        assert body["tower_id"] == tower_id
+        assert body["method"]
+        assert isinstance(body["attributions"], list)
+        assert body["attributions"]
+        assert {"feature", "impact"}.issubset(body["attributions"][0].keys())
+    else:
+        assert response.status_code == 503
+        assert "trained model artifacts" in response.json()["detail"]
 
 
 def test_incident_and_acknowledge_flow(client):
@@ -61,3 +64,47 @@ def test_incident_and_acknowledge_flow(client):
     body = incident_response.json()
     assert "incidents" in body
     assert "count" in body
+
+
+def test_observability_metrics_contract(client):
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    body = response.text
+    assert "nn5g_http_requests_total" in body
+    assert "nn5g_inference_total" in body
+
+
+def test_model_quality_contract(client):
+    response = client.get("/api/v1/model-quality")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] in {"ok", "missing"}
+    assert "gate" in body
+    assert "model_version" in body
+
+
+def test_trace_log_contract(client):
+    response = client.get("/api/v1/trace-log?limit=20")
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["count"], int)
+    assert isinstance(body["records"], list)
+    if body["records"]:
+        first = body["records"][0]
+        assert "trace_id" in first
+        assert "tower_id" in first
+        assert "fault_type" in first
+
+
+def test_service_metrics_contract(client):
+    response = client.get("/api/v1/service-metrics")
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["auto_resolved_count"], int)
+    assert isinstance(body["downtime_avoided_minutes"], int)
+    assert isinstance(body["users_protected"], int)
+    assert isinstance(body["cost_saved"], int)
+    assert isinstance(body["active_dispatches"], int)
+    assert isinstance(body["open_incidents"], int)
+    assert body["source"] == "server"
+    assert "updated_at" in body

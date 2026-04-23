@@ -2,29 +2,43 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import AIProofPanel from "../components/AIProofPanel";
 import AlertFeed from "../components/AlertFeed";
 import DispatchTicketPanel from "../components/DispatchTicketPanel";
+import GovernanceIntegrationPanel from "../components/GovernanceIntegrationPanel";
 import LiveActivityRail from "../components/LiveActivityRail";
 import MissionControlPanel from "../components/MissionControlPanel";
+import OperatorWorkflowPanel from "../components/OperatorWorkflowPanel";
 import RecommendationPanel from "../components/RecommendationPanel";
 import ServiceImpactPanel from "../components/ServiceImpactPanel";
 import TowerDetail from "../components/TowerDetail";
 import TowerMap from "../components/TowerMap";
 import { useLiveNetwork } from "../context/WebSocketContext";
-import { formatProbability } from "../lib/formatters";
 
 export default function Dashboard({ demoMoment, session }) {
   const {
     activityLog,
+    approvalQueue,
+    auditLog,
+    businessMetrics,
     cycleCount,
     dataMode,
     demoEnabled,
     dispatchTickets,
+    incidents,
+    integrationEvents,
+    observability,
     runAutonomousRecovery,
     serviceMetrics,
     serviceRecords,
     towerServiceState,
     towers,
     triggerIncidentDrill,
+    transitionIncident,
+    addIncidentNote,
+    verifyIncidentResolution,
+    closeIncident,
+    approveAutoAction,
+    rejectAutoAction,
   } = useLiveNetwork();
+
   const [selectedTower, setSelectedTower] = useState(null);
   const [attentionTowerId, setAttentionTowerId] = useState("");
   const missionControlRef = useRef(null);
@@ -33,10 +47,8 @@ export default function Dashboard({ demoMoment, session }) {
   const metrics = useMemo(() => {
     const critical = towers.filter((tower) => tower.status === "red").length;
     const warning = towers.filter((tower) => tower.status === "amber").length;
-    
-    // Calculate a 0-100 aggregate network health score. In a real environment, this factors in availability and throughput.
     const averageRisk = towers.length ? towers.reduce((total, tower) => total + tower.fault_probability, 0) / towers.length : 0;
-    const healthScore = Math.max(0, Math.round(100 - (averageRisk * 100) - (critical * 0.5)));
+    const healthScore = Math.max(0, Math.round(100 - averageRisk * 100 - critical * 0.5));
 
     return [
       {
@@ -52,19 +64,43 @@ export default function Dashboard({ demoMoment, session }) {
         color: critical > 0 ? "text-[rgba(235,85,69,1)]" : "text-[var(--text-primary)]",
       },
       {
-        label: "WARNING TOWERS",
-        value: warning,
-        detail: "KPI drift detected",
-        color: warning > 0 ? "text-[rgba(245,166,35,1)]" : "text-[var(--text-primary)]",
+        label: "OPEN INCIDENTS",
+        value: incidents.filter((incident) => !["closed"].includes(incident.status)).length,
+        detail: "Workflow records active",
+        color: "text-[var(--accent)]",
+      },
+      {
+        label: "MODEL VERSION",
+        value: observability.last_model_version ?? "unknown",
+        detail: "Attached to each inference",
+        color: "text-[var(--text-primary)]",
+      },
+      {
+        label: "PENDING APPROVALS",
+        value: approvalQueue.filter((item) => item.status === "pending").length,
+        detail: "Auto-action gates",
+        color: "text-[var(--text-primary)]",
       },
       {
         label: "ACTIVE DISPATCHES",
         value: dispatchTickets.length,
         detail: "Field teams deployed",
         color: "text-[var(--accent)]",
-      }
+      },
+      {
+        label: "WARNING TOWERS",
+        value: warning,
+        detail: "KPI drift detected",
+        color: warning > 0 ? "text-[rgba(245,166,35,1)]" : "text-[var(--text-primary)]",
+      },
+      {
+        label: "SIGNED LOG ENTRIES",
+        value: auditLog.length,
+        detail: "Audit trace depth",
+        color: "text-[var(--text-primary)]",
+      },
     ];
-  }, [towers, dispatchTickets.length]);
+  }, [approvalQueue, auditLog.length, dispatchTickets.length, incidents, observability.last_model_version, towers]);
 
   useEffect(() => {
     if (!demoMoment?.towerId) return undefined;
@@ -87,7 +123,6 @@ export default function Dashboard({ demoMoment, session }) {
 
   return (
     <section className="pb-6 animate-fade-in-up">
-      {/* Dense KPI Ribbon */}
       <div className="surface-panel mb-6 px-4 py-4 translate-y-[-12px]">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="flex items-center gap-4 border-b border-core-border pb-4 lg:border-b-0 lg:pb-0 lg:border-r pr-6">
@@ -96,7 +131,7 @@ export default function Dashboard({ demoMoment, session }) {
               {dataMode === "live" ? "LIVE ML TELEMETRY" : "DEMO ML TELEMETRY"}
             </div>
           </div>
-          
+
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 flex-1 text-left">
             {metrics.map((metric) => (
               <div key={metric.label} className="flex flex-col">
@@ -112,11 +147,11 @@ export default function Dashboard({ demoMoment, session }) {
       </div>
 
       <div className="grid gap-6">
-        <ServiceImpactPanel serviceMetrics={serviceMetrics} />
+        <ServiceImpactPanel serviceMetrics={serviceMetrics} businessMetrics={businessMetrics} />
       </div>
 
       <div className="mt-6">
-        <AIProofPanel towers={towers} />
+        <AIProofPanel towers={towers} observability={observability} />
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_400px]">
@@ -143,6 +178,26 @@ export default function Dashboard({ demoMoment, session }) {
         <div className="h-[500px] xl:h-[640px] min-h-0">
           <LiveActivityRail activityLog={activityLog} />
         </div>
+      </div>
+
+      <div className="mt-6 grid gap-6">
+        <OperatorWorkflowPanel
+          incidents={incidents}
+          approvalQueue={approvalQueue}
+          dispatchTickets={dispatchTickets}
+          onTransitionIncident={transitionIncident}
+          onAddIncidentNote={addIncidentNote}
+          onVerifyIncidentResolution={verifyIncidentResolution}
+          onCloseIncident={closeIncident}
+          onApproveAutoAction={approveAutoAction}
+          onRejectAutoAction={rejectAutoAction}
+        />
+        <GovernanceIntegrationPanel
+          auditLog={auditLog}
+          observability={observability}
+          integrationEvents={integrationEvents}
+          businessMetrics={businessMetrics}
+        />
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.62fr)_352px] xl:items-start">
