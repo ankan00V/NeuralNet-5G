@@ -153,6 +153,11 @@ textarea {
   background-color: rgba(255, 255, 255, 0.02);
 }
 
+.drill-card {
+  flex: 0 0 auto;
+  min-width: 180px;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

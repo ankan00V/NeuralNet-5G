@@ -222,6 +222,20 @@ def main() -> None:
     val_logits = infer_logits(scaled_val)
     test_logits = infer_logits(scaled_test)
 
+    macro_weight = float(os.getenv("CALIBRATION_MACRO_WEIGHT", "0.4") or 0.4)
+    minority_weight = float(os.getenv("CALIBRATION_MINORITY_WEIGHT", "0.6") or 0.6)
+    if macro_weight < 0.0:
+        macro_weight = 0.0
+    if minority_weight < 0.0:
+        minority_weight = 0.0
+    total_weight = macro_weight + minority_weight
+    if total_weight <= 0.0:
+        macro_weight = 0.4
+        minority_weight = 0.6
+        total_weight = 1.0
+    macro_weight /= total_weight
+    minority_weight /= total_weight
+
     bias_candidates = [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]
     best_bias = np.zeros(len(FAULT_TYPES), dtype=np.float32)
     best_val_f1 = -1.0
@@ -231,7 +245,7 @@ def main() -> None:
         val_predictions = np.argmax(val_logits + candidate, axis=1)
         candidate_f1 = f1_score(val_y, val_predictions, average="macro", zero_division=0)
         candidate_minority = f1_score(val_y, val_predictions, labels=[1, 2, 3], average="macro", zero_division=0)
-        candidate_objective = 0.4 * candidate_f1 + 0.6 * candidate_minority
+        candidate_objective = macro_weight * candidate_f1 + minority_weight * candidate_minority
         if candidate_objective > best_val_objective:
             best_val_f1 = candidate_f1
             best_val_objective = candidate_objective
@@ -254,7 +268,7 @@ def main() -> None:
         val_predictions = decode_with_thresholds(val_probabilities, candidate_thresholds)
         candidate_f1 = f1_score(val_y, val_predictions, average="macro", zero_division=0)
         candidate_minority = f1_score(val_y, val_predictions, labels=[1, 2, 3], average="macro", zero_division=0)
-        candidate_objective = 0.4 * candidate_f1 + 0.6 * candidate_minority
+        candidate_objective = macro_weight * candidate_f1 + minority_weight * candidate_minority
         if candidate_objective > best_threshold_objective:
             best_threshold_f1 = candidate_f1
             best_threshold_objective = candidate_objective

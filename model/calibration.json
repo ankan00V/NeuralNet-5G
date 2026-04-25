@@ -1,19 +1,19 @@
 {
   "class_bias": [
     0.0,
-    0.0,
-    0.0,
-    0.0
+    -1.0,
+    -0.25,
+    -1.0
   ],
   "class_thresholds": [
     0.0,
-    0.30000001192092896,
-    0.30000001192092896,
-    0.30000001192092896
+    0.75,
+    0.5,
+    0.75
   ],
-  "val_macro_f1_after_bias_calibration": 0.3250954942222771,
-  "val_objective_after_bias_calibration": 0.3044055578446805,
-  "val_macro_f1_after_threshold_calibration": 0.28766916654589575,
-  "val_objective_after_threshold_calibration": 0.2921414884315248,
-  "generated_at": "2026-04-20T08:16:00.152373+00:00"
+  "val_macro_f1_after_bias_calibration": 0.5990895948222963,
+  "val_objective_after_bias_calibration": 0.5837430341404194,
+  "val_macro_f1_after_threshold_calibration": 0.6106519451911223,
+  "val_objective_after_threshold_calibration": 0.5956201625926183,
+  "generated_at": "2026-04-25T20:37:36.955249+00:00"
 }

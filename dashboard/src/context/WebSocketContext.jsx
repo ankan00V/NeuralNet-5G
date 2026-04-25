@@ -270,7 +270,7 @@ export function WebSocketProvider({ children }) {
         createActivityEntry(
           "boot",
           "Operator workspace ready",
-          "Demo mode is active. Trigger a fault drill or wait for the inference stream to advance.",
+          "Simulation mode is active. Trigger a fault drill or wait for the inference stream to advance.",
           "info",
         ),
       ];
@@ -928,7 +928,7 @@ export function WebSocketProvider({ children }) {
       recordActivity([
         createActivityEntry(
           "warning",
-          "Demo actions disabled",
+          "Simulation actions disabled",
           "Fault injection is disabled in live mode.",
           "warning",
           towerId,
@@ -1016,14 +1016,14 @@ export function WebSocketProvider({ children }) {
     const faultType = target.fault_type !== "normal" ? target.fault_type : "hardware_anomaly";
     const result = await injectFault(target.tower_id, faultType);
 
-    recordActivity([
-      createActivityEntry(
-        "critical",
-        `DEMO INFERENCE escalated ${target.tower_id}`,
-        `${target.tower_id} was forced into a ${faultType.replaceAll(
-          "_",
-          " ",
-        )} event so the queue, map, and recovery workflow react immediately.`,
+      recordActivity([
+        createActivityEntry(
+          "critical",
+          `INFERENCE DRILL escalated ${target.tower_id}`,
+          `${target.tower_id} was forced into a ${faultType.replaceAll(
+            "_",
+            " ",
+          )} event so the queue, map, and recovery workflow react immediately.`,
         "critical",
         target.tower_id,
       ),

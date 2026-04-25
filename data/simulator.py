@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -186,29 +187,33 @@ class TowerSimulator:
         strength = state.severity * precursor_ratio
 
         if state.fault_type == "congestion":
-            kpis["dl_throughput"] = _clip("dl_throughput", kpis["dl_throughput"] * (1.0 + 0.1 * strength))
-            kpis["ul_throughput"] = _clip("ul_throughput", kpis["ul_throughput"] * (1.0 + 0.07 * strength))
-            kpis["rtt"] = _clip("rtt", kpis["rtt"] + 28.0 * strength)
-            kpis["ho_failure_rate"] = _clip("ho_failure_rate", kpis["ho_failure_rate"] + 1.2 * strength)
-            kpis["sinr"] = _clip("sinr", kpis["sinr"] - 0.5 * strength)
-            kpis["rsrp"] = _clip("rsrp", kpis["rsrp"] - 0.2 * strength)
-        elif state.fault_type == "coverage_degradation":
-            kpis["rsrp"] = _clip("rsrp", kpis["rsrp"] - 12.0 * strength)
-            kpis["sinr"] = _clip("sinr", kpis["sinr"] - 6.5 * strength)
-            kpis["dl_throughput"] = _clip("dl_throughput", kpis["dl_throughput"] * (1.0 - 0.06 * strength))
-            kpis["ul_throughput"] = _clip("ul_throughput", kpis["ul_throughput"] * (1.0 - 0.04 * strength))
-            kpis["rtt"] = _clip("rtt", kpis["rtt"] + 8.0 * strength)
+            # Early warning for congestion should look like rising delay + mobility strain
+            # with throughput starting to soften (not increase).
+            kpis["dl_throughput"] = _clip("dl_throughput", kpis["dl_throughput"] * (1.0 - 0.14 * strength))
+            kpis["ul_throughput"] = _clip("ul_throughput", kpis["ul_throughput"] * (1.0 - 0.09 * strength))
+            kpis["rtt"] = _clip("rtt", kpis["rtt"] + 32.0 * strength)
             kpis["ho_failure_rate"] = _clip("ho_failure_rate", kpis["ho_failure_rate"] + 1.6 * strength)
+            kpis["sinr"] = _clip("sinr", kpis["sinr"] - 0.9 * strength)
+            kpis["rsrp"] = _clip("rsrp", kpis["rsrp"] - 0.4 * strength)
+        elif state.fault_type == "coverage_degradation":
+            # Coverage degradation precursor: radio KPIs drift down first, then UE experience follows.
+            kpis["rsrp"] = _clip("rsrp", kpis["rsrp"] - 16.0 * strength)
+            kpis["sinr"] = _clip("sinr", kpis["sinr"] - 9.0 * strength)
+            kpis["dl_throughput"] = _clip("dl_throughput", kpis["dl_throughput"] * (1.0 - 0.10 * strength))
+            kpis["ul_throughput"] = _clip("ul_throughput", kpis["ul_throughput"] * (1.0 - 0.07 * strength))
+            kpis["rtt"] = _clip("rtt", kpis["rtt"] + 12.0 * strength)
+            kpis["ho_failure_rate"] = _clip("ho_failure_rate", kpis["ho_failure_rate"] + 2.0 * strength)
         elif state.fault_type == "hardware_anomaly":
-            oscillation = np.sin((state.progress + 1) * 1.25)
-            burst = 1.0 if ((state.progress + 1) % 4 == 0) else 0.0
+            # Hardware anomaly precursor: growing volatility + occasional latency spikes across KPIs.
+            oscillation = np.sin((state.progress + 1) * 1.1)
+            burst = 1.0 if ((state.progress + 1) % 5 == 0) else 0.0
             jitter = self.rng.normal(0.0, 1.0, size=len(FEATURE_NAMES))
-            kpis["sinr"] = _clip("sinr", kpis["sinr"] + (oscillation * 4.4 * state.severity) + (jitter[1] * 1.0))
-            kpis["rsrp"] = _clip("rsrp", kpis["rsrp"] + (oscillation * 3.6 * state.severity) + (jitter[0] * 0.8))
-            kpis["rtt"] = _clip("rtt", kpis["rtt"] + (abs(jitter[5]) * 16.0 * state.severity) + (burst * 12.0 * state.severity))
-            kpis["ho_failure_rate"] = _clip("ho_failure_rate", kpis["ho_failure_rate"] + (abs(jitter[4]) * 2.1 * state.severity) + (burst * 0.9))
-            kpis["dl_throughput"] = _clip("dl_throughput", kpis["dl_throughput"] * (1.0 - 0.08 * abs(oscillation)))
-            kpis["ul_throughput"] = _clip("ul_throughput", kpis["ul_throughput"] * (1.0 - 0.06 * abs(oscillation)))
+            kpis["sinr"] = _clip("sinr", kpis["sinr"] + (oscillation * 2.8 * state.severity) + (jitter[1] * 1.2 * strength))
+            kpis["rsrp"] = _clip("rsrp", kpis["rsrp"] + (oscillation * 2.2 * state.severity) + (jitter[0] * 1.0 * strength))
+            kpis["rtt"] = _clip("rtt", kpis["rtt"] + (abs(jitter[5]) * 18.0 * state.severity) + (burst * 22.0 * state.severity))
+            kpis["ho_failure_rate"] = _clip("ho_failure_rate", kpis["ho_failure_rate"] + (abs(jitter[4]) * 2.4 * state.severity) + (burst * 1.1))
+            kpis["dl_throughput"] = _clip("dl_throughput", kpis["dl_throughput"] * (1.0 - 0.10 * strength) + (jitter[2] * 8.0 * strength))
+            kpis["ul_throughput"] = _clip("ul_throughput", kpis["ul_throughput"] * (1.0 - 0.08 * strength) + (jitter[3] * 3.0 * strength))
         return kpis
 
     def _apply_fault(self, kpis: dict) -> tuple[dict, str, str]:
@@ -303,10 +308,17 @@ class TowerSimulator:
 
 
 class NetworkSimulator:
-    def __init__(self, seed: int = 42) -> None:
+    def __init__(self, seed: int = 42, sample_period_seconds: int | None = None) -> None:
         self.seed = seed
         self.rng = np.random.default_rng(seed)
+        self.sample_period_seconds = int(
+            sample_period_seconds
+            if sample_period_seconds is not None
+            else int((os.getenv("SIM_SAMPLE_PERIOD_SECONDS", "60") or "60").strip())
+        )
+        self.sample_period_seconds = max(1, self.sample_period_seconds)
         self.towers = self._build_towers()
+        self.clock = datetime.now(UTC)
         self._prime_histories()
 
     def _build_towers(self) -> dict[str, TowerSimulator]:
@@ -324,11 +336,12 @@ class NetworkSimulator:
         return towers
 
     def _prime_histories(self) -> None:
-        current_time = datetime.now(UTC) - timedelta(seconds=30)
+        current_time = self.clock - timedelta(seconds=self.sample_period_seconds * 30)
         for step in range(30):
-            tick_time = current_time + timedelta(seconds=step)
+            tick_time = current_time + timedelta(seconds=step * self.sample_period_seconds)
             for tower in self.towers.values():
                 tower.step(tick_time)
+        self.clock = current_time + timedelta(seconds=30 * self.sample_period_seconds)
 
     def inject_fault(
         self,
@@ -344,12 +357,15 @@ class NetworkSimulator:
         self.towers[tower_id].reset_fault()
 
     def advance_all(self, steps: int = 1, start_time: datetime | None = None) -> list[dict]:
-        now = start_time or datetime.now(UTC)
+        steps = max(1, int(steps))
+        now = start_time or self.clock
         rows: list[dict] = []
         for step in range(steps):
-            tick_time = now + timedelta(seconds=step)
+            tick_time = now + timedelta(seconds=step * self.sample_period_seconds)
             for tower in self.towers.values():
                 rows.append(tower.step(tick_time))
+        if start_time is None:
+            self.clock = now + timedelta(seconds=steps * self.sample_period_seconds)
         return rows
 
     def get_latest_tower_rows(self) -> list[dict]:
@@ -384,7 +400,7 @@ class NetworkSimulator:
 
         return rows
 
-    def generate_dataset(self, n_hours: int = 48, interval_seconds: int = 15) -> Path:
+    def generate_dataset(self, n_hours: int = 48, interval_seconds: int = 60) -> Path:
         output_path = Path(__file__).resolve().parent / "output" / "training_data.csv"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -443,7 +459,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["dataset", "stream"], default="stream")
     parser.add_argument("--hours", type=int, default=48)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--interval-seconds", type=int, default=15)
+    # A single sample represents a minute of network telemetry by default.
+    parser.add_argument("--interval-seconds", type=int, default=60)
     parser.add_argument("--inject", nargs=2, metavar=("TOWER_ID", "FAULT_TYPE"))
     parser.add_argument("--showcase", action="store_true", help="print the configured showcase tower IDs and exit")
     return parser.parse_args()

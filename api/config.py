@@ -11,7 +11,8 @@ DEFAULT_AUTH_USERS = [
         "name": "NOC Lead",
         "role": "admin",
         "tenant": "*",
-        "password_hash": "pbkdf2_sha256$200000$rsU8XGbsPdMOT2N_n1Fhvg==$MVuxnJxqFcTPpDq5vKogTiwi5Lk4dk5k3uomZTFzIdA=",
+        # Demo default password: 12345 (override via AUTH_USERS_JSON in production).
+        "password_hash": "pbkdf2_sha256$200000$ufCDKAPIAyO-6o5ei9BZuw==$RhdLroZwAvgQQb9YXJg9oTugUqi-GqW3GTMewRgBhLQ=",
     }
 ]
 

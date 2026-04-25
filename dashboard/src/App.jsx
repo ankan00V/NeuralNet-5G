@@ -180,7 +180,7 @@ export default function App() {
           <div className="flex items-center gap-4 text-xs font-mono text-core-textMuted">
             <span className="hidden md:flex nav-pill text-core-text">
               <span className={`live-dot ${connected ? "bg-core-primary shadow-glow-primary" : "bg-core-critical shadow-glow-critical"}`}></span>
-              {dataMode === "live" ? "Network Feed" : "Demo Feed"}
+              {dataMode === "live" ? "Network Feed" : "Simulation Feed"}
             </span>
 
             <ThemeToggle />

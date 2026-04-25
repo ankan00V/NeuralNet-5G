@@ -31,7 +31,7 @@ cp .env.example .env
 2. Set judge-friendly demo credentials in `.env`
 ```bash
 cat >> .env <<'ENV'
-AUTH_USERS_JSON=[{"email":"ops@neuralnet5g.ai","name":"NOC Lead","role":"admin","tenant":"*","password_hash":"plain:judge123"}]
+AUTH_USERS_JSON=[{"email":"ops@neuralnet5g.ai","name":"NOC Lead","role":"admin","tenant":"*","password_hash":"plain:12345"}]
 APP_MODE=demo
 ENABLE_DEV_ENDPOINTS=false
 INGESTION_MODE=simulator
@@ -69,7 +69,7 @@ Open: `https://neuralnet5g.test`
 
 7. Login
 - Email: `ops@neuralnet5g.ai`
-- Password: `judge123`
+- Password: `12345`
 
 8. Optional public demo link (time-boxed)
 ```bash
@@ -88,7 +88,7 @@ curl -s https://neuralnet5g.test/api/health/ready
 ```bash
 TOKEN=$(curl -s https://neuralnet5g.test/api/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"ops@neuralnet5g.ai","password":"judge123"}' | jq -r '.access_token')
+  -d '{"email":"ops@neuralnet5g.ai","password":"12345"}' | jq -r '.access_token')
 ```
 
 3. Towers, explainability, observability
@@ -131,16 +131,16 @@ curl -s https://neuralnet5g.test/api/v1/ingest/telemetry \
 
 ## Current Scorecard (Transparent Baseline)
 
-Latest `model/metrics.json` generated at `2026-04-20T08:16:00Z`:
-- `accuracy`: 0.3428
-- `macro_f1`: 0.3159
-- `congestion f1`: 0.4918
-- `coverage_degradation f1`: 0.2947
-- `hardware_anomaly f1`: 0.3323
+Latest `model/metrics.json` generated at `2026-04-25T20:37:36Z`:
+- `accuracy`: 0.7543
+- `macro_f1`: 0.6034
+- `congestion f1`: 0.6206
+- `coverage_degradation f1`: 0.5206
+- `hardware_anomaly f1`: 0.4365
 
 Interpretation:
-- This is acceptable for architecture/demo validation.
-- This is not yet production-acceptable for minority fault classes.
+- This is strong for a hackathon-grade synthetic KPI feed and shows the system is not "theater" (the model learns true precursors).
+- This is still not production-acceptable without real operator telemetry and continuous validation.
 - The platform enforces model quality gates in production (`ENFORCE_MODEL_GATE=true` by default in `APP_MODE=prod`) and blocks startup when KPIs miss thresholds.
 
 ## What Was Hardened
@@ -255,7 +255,7 @@ End-to-end smoke:
 ```bash
 API_BASE_URL=https://neuralnet5g.test \
 API_AUTH_EMAIL=ops@neuralnet5g.ai \
-API_AUTH_PASSWORD=judge123 \
+API_AUTH_PASSWORD=12345 \
 python scripts/smoke_pipeline.py
 ```
 

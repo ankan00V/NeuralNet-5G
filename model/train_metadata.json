@@ -1,79 +1,79 @@
 {
-  "best_val_macro_f1": 0.3250954942222771,
-  "best_val_objective": 0.3044055578446805,
-  "train_sequences_raw": 732450,
-  "train_sequences": 350000,
-  "val_sequences": 43100,
-  "test_sequences": 86200,
+  "best_val_macro_f1": 0.5833156978327736,
+  "best_val_objective": 0.567578591054149,
+  "train_sequences_raw": 242850,
+  "train_sequences": 348105,
+  "val_sequences": 14300,
+  "test_sequences": 28600,
   "input_size": 24,
   "prediction_horizon_minutes": [
     15,
     30
   ],
   "train_label_counts": {
-    "0": 130165,
-    "1": 95376,
-    "2": 62870,
-    "3": 61589
+    "0": 173305,
+    "1": 73055,
+    "2": 55879,
+    "3": 45866
   },
   "val_label_counts": {
-    "0": 20797,
-    "1": 9630,
-    "2": 6146,
-    "3": 6527
+    "0": 11177,
+    "1": 1459,
+    "2": 1163,
+    "3": 501
   },
   "test_label_counts": {
-    "0": 24422,
-    "1": 26772,
-    "2": 17940,
-    "3": 17066
+    "0": 17946,
+    "1": 5076,
+    "2": 2758,
+    "3": 2820
   },
   "train_ratio": 0.85,
   "val_ratio": 0.9,
   "seed": 42,
   "loss_type": "focal",
-  "focal_gamma": 1.25,
+  "focal_gamma": 1.5,
   "class_weights": [
-    0.7081719636917114,
-    0.8803945183753967,
-    1.1786214113235474,
-    1.1957281827926636
+    0.6862735748291016,
+    0.9695311188697815,
+    1.0792505741119385,
+    1.1679530143737793
   ],
   "use_weighted_sampler": true,
-  "max_train_samples": 350000,
+  "max_train_samples": null,
   "optimizer": {
     "lr": 0.0008,
     "weight_decay": 0.0001
   },
-  "batch_size": 768,
-  "epochs": 20,
-  "patience": 6,
-  "val_macro_weight": 0.4,
-  "val_minority_weight": 0.6,
+  "batch_size": 384,
+  "epochs": 35,
+  "patience": 8,
+  "val_macro_weight": 0.85,
+  "val_minority_weight": 0.15,
   "raw_feature_baseline": {
     "rsrp": {
-      "mean": 4.4825060285802465e-07,
-      "std": 0.9917336702346802
+      "mean": 2.7993934281766997e-07,
+      "std": 0.9918138980865479
     },
     "sinr": {
-      "mean": 1.341593858228407e-08,
-      "std": 0.99301677942276
+      "mean": -6.683621904812753e-07,
+      "std": 0.9929152131080627
     },
     "dl_throughput": {
-      "mean": -4.280044763049773e-08,
-      "std": 0.9922949075698853
+      "mean": -2.2428416457387357e-07,
+      "std": 0.9922765493392944
     },
     "ul_throughput": {
-      "mean": -4.749731274955593e-08,
-      "std": 0.9922298789024353
+      "mean": -1.2044536390476424e-07,
+      "std": 0.9923208355903625
     },
     "ho_failure_rate": {
-      "mean": -7.78872610851522e-09,
-      "std": 0.9906141757965088
+      "mean": 7.319810890749068e-08,
+      "std": 0.9909287691116333
     },
     "rtt": {
-      "mean": -5.1178119520045584e-08,
-      "std": 0.9831030964851379
+      "mean": 3.438280060663601e-08,
+      "std": 0.9836388826370239
     }
   }
 }
